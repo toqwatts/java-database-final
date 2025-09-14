@@ -1,58 +1,146 @@
 package com.project.code.Controller;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.*;
+
+@RestController
+@RequestMapping("/inventory")
 public class InventoryController {
-// 1. Set Up the Controller Class:
-//    - Annotate the class with `@RestController` to indicate that this is a REST controller, which handles HTTP requests and responses.
-//    - Use `@RequestMapping("/inventory")` to set the base URL path for all methods in this controller. All endpoints related to inventory will be prefixed with `/inventory`.
 
+    private final ProductRepository productRepository;
+    private final InventoryRepository inventoryRepository;
+    private final ServiceClass serviceClass;
 
-// 2. Autowired Dependencies:
-//    - Autowire necessary repositories and services:
-//      - `ProductRepository` will be used to interact with product data (i.e., finding, updating products).
-//      - `InventoryRepository` will handle CRUD operations related to the inventory.
-//      - `ServiceClass` will help with the validation logic (e.g., validating product IDs and inventory data).
+    @Autowired
+    public InventoryController(ProductRepository productRepository,
+                               InventoryRepository inventoryRepository,
+                               ServiceClass serviceClass) {
+        this.productRepository = productRepository;
+        this.inventoryRepository = inventoryRepository;
+        this.serviceClass = serviceClass;
+    }
 
+    // 3. Update Inventory
+    @PutMapping("/update")
+    public Map<String, String> updateInventory(@RequestBody CombinedRequest request) {
+        Map<String, String> response = new HashMap<>();
 
-// 3. Define the `updateInventory` Method:
-//    - This method handles HTTP PUT requests to update inventory for a product.
-//    - It takes a `CombinedRequest` (containing `Product` and `Inventory`) in the request body.
-//    - The product ID is validated, and if valid, the inventory is updated in the database.
-//    - If the inventory exists, update it and return a success message. If not, return a message indicating no data available.
+        if (!serviceClass.validateProductId(request.getProduct().getId())) {
+            response.put("message", "Invalid product ID.");
+            return response;
+        }
 
+        Inventory existingInventory = serviceClass.getInventoryId(request.getInventory());
+        if (existingInventory != null) {
+            existingInventory.setStockLevel(request.getInventory().getStockLevel());
+            inventoryRepository.save(existingInventory);
+            response.put("message", "Inventory updated successfully.");
+        } else {
+            response.put("message", "No inventory data available for this product and store.");
+        }
 
-// 4. Define the `saveInventory` Method:
-//    - This method handles HTTP POST requests to save a new inventory entry.
-//    - It accepts an `Inventory` object in the request body.
-//    - It first validates whether the inventory already exists. If it exists, it returns a message stating so. If it doesn’t exist, it saves the inventory and returns a success message.
+        return response;
+    }
 
+    // 4. Save Inventory
+    @PostMapping("/save")
+    public Map<String, String> saveInventory(@RequestBody Inventory inventory) {
+        Map<String, String> response = new HashMap<>();
 
-// 5. Define the `getAllProducts` Method:
-//    - This method handles HTTP GET requests to retrieve products for a specific store.
-//    - It uses the `storeId` as a path variable and fetches the list of products from the database for the given store.
-//    - The products are returned in a `Map` with the key `"products"`.
+        if (!serviceClass.validateInventory(inventory)) {
+            response.put("message", "Inventory already exists for this product in the store.");
+            return response;
+        }
 
+        inventoryRepository.save(inventory);
+        response.put("message", "Inventory saved successfully.");
+        return response;
+    }
 
-// 6. Define the `getProductName` Method:
-//    - This method handles HTTP GET requests to filter products by category and name.
-//    - If either the category or name is `"null"`, adjust the filtering logic accordingly.
-//    - Return the filtered products in the response with the key `"product"`.
+    // 5. Get All Products for a Store
+    @GetMapping("/products/{storeId}")
+    public Map<String, List<Product>> getAllProducts(@PathVariable Long storeId) {
+        Map<String, List<Product>> response = new HashMap<>();
+        List<Inventory> inventoryList = inventoryRepository.findByStore_Id(storeId);
 
+        List<Product> products = new ArrayList<>();
+        for (Inventory inv : inventoryList) {
+            products.add(inv.getProduct());
+        }
 
-// 7. Define the `searchProduct` Method:
-//    - This method handles HTTP GET requests to search for products by name within a specific store.
-//    - It uses `name` and `storeId` as parameters and searches for products that match the `name` in the specified store.
-//    - The search results are returned in the response with the key `"product"`.
+        response.put("products", products);
+        return response;
+    }
 
+    // 6. Get Product by Category and Name
+    @GetMapping("/filter")
+    public Map<String, List<Product>> getProductName(@RequestParam String category,
+                                                     @RequestParam String name) {
+        Map<String, List<Product>> response = new HashMap<>();
+        List<Product> products;
 
-// 8. Define the `removeProduct` Method:
-//    - This method handles HTTP DELETE requests to delete a product by its ID.
-//    - It first validates if the product exists. If it does, it deletes the product from the `ProductRepository` and also removes the related inventory entry from the `InventoryRepository`.
-//    - Returns a success message with the key `"message"` indicating successful deletion.
+        if (!"null".equalsIgnoreCase(category) && !"null".equalsIgnoreCase(name)) {
+            products = productRepository.findByCategory(category);
+            products.removeIf(product -> !product.getName().equalsIgnoreCase(name));
+        } else if (!"null".equalsIgnoreCase(category)) {
+            products = productRepository.findByCategory(category);
+        } else if (!"null".equalsIgnoreCase(name)) {
+            Product p = productRepository.findByName(name);
+            products = p != null ? Collections.singletonList(p) : new ArrayList<>();
+        } else {
+            products = productRepository.findAll();
+        }
 
+        response.put("product", products);
+        return response;
+    }
 
-// 9. Define the `validateQuantity` Method:
-//    - This method handles HTTP GET requests to validate if a specified quantity of a product is available in stock for a given store.
-//    - It checks the inventory for the product in the specified store and compares it to the requested quantity.
-//    - If sufficient stock is available, return `true`; otherwise, return `false`.
+    // 7. Search Product in a Store by Name
+    @GetMapping("/search")
+    public Map<String, List<Product>> searchProduct(@RequestParam Long storeId,
+                                                    @RequestParam String name) {
+        Map<String, List<Product>> response = new HashMap<>();
+        List<Product> products = productRepository.findByNameLike(storeId, name);
+        response.put("product", products);
+        return response;
+    }
 
+    // 8. Remove Product by ID
+    @DeleteMapping("/remove/{productId}")
+    public Map<String, String> removeProduct(@PathVariable Long productId) {
+        Map<String, String> response = new HashMap<>();
+
+        if (!serviceClass.validateProductId(productId)) {
+            response.put("message", "Product not found.");
+            return response;
+        }
+
+        // Delete product and related inventory
+        productRepository.deleteById(productId);
+        inventoryRepository.deleteByProductId(productId);
+
+        response.put("message", "Product and related inventory deleted successfully.");
+        return response;
+    }
+
+    // 9. Validate Quantity in Store
+    @GetMapping("/validateQuantity")
+    public Map<String, String> validateQuantity(@RequestParam Long storeId,
+                                                @RequestParam Long productId,
+                                                @RequestParam Integer quantity) {
+        Map<String, String> response = new HashMap<>();
+
+        Inventory inventory = inventoryRepository.findByProductIdandStoreId(productId, storeId);
+        if (inventory == null) {
+            response.put("message", "No inventory found for this product in the store.");
+        } else if (inventory.getStockLevel() < quantity) {
+            response.put("message", "Insufficient stock. Available: " + inventory.getStockLevel());
+        } else {
+            response.put("message", "Sufficient stock available.");
+        }
+
+        return response;
+    }
 }
